@@ -6,6 +6,11 @@ struct CommandRunner: Sendable {
   let environment: [String: String]
 
   init(environment: [String: String] = ProcessInfo.processInfo.environment) {
+    var environment = environment
+    // GUI launches can omit Homebrew. Child tools need the same PATH as executable lookup
+    // so Colima can find Lima and its other dependencies.
+    environment["PATH"] = ExecutableLocator(environment: environment).searchDirectories.joined(
+      separator: ":")
     self.environment = environment
   }
 
@@ -115,7 +120,6 @@ struct ExecutableLocator: Sendable {
   }
 
   func locate(_ name: String) throws -> URL {
-    let searchDirectories = pathDirectories + platformDirectories
     for directory in searchDirectories {
       let candidate = URL(fileURLWithPath: directory, isDirectory: true).appendingPathComponent(
         name)
@@ -124,6 +128,11 @@ struct ExecutableLocator: Sendable {
       }
     }
     throw ExecutableLocationError.notFound(name: name, searched: searchDirectories)
+  }
+
+  var searchDirectories: [String] {
+    let inherited = pathDirectories
+    return inherited + platformDirectories.filter { !inherited.contains($0) }
   }
 
   private var pathDirectories: [String] {
