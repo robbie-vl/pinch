@@ -6,10 +6,35 @@ import XCTest
 @MainActor
 final class CommandRunnerTests: XCTestCase {
   func testInheritsTheParentEnvironmentByDefault() async throws {
-    let expectedPath = try XCTUnwrap(ProcessInfo.processInfo.environment["PATH"])
-    let path = try await CommandRunner().run(
+    let expectedHome = try XCTUnwrap(ProcessInfo.processInfo.environment["HOME"])
+    let home = try await CommandRunner().run(
+      executable: URL(fileURLWithPath: "/usr/bin/printenv"), arguments: ["HOME"])
+    XCTAssertEqual(home, expectedHome)
+  }
+
+  func testAddsHomebrewToChildProcessPathForFinderLaunches() async throws {
+    let inheritedPath = "/usr/bin:/bin:/usr/sbin:/sbin"
+    let path = try await CommandRunner(environment: ["PATH": inheritedPath]).run(
       executable: URL(fileURLWithPath: "/usr/bin/printenv"), arguments: ["PATH"])
-    XCTAssertEqual(path, expectedPath)
+
+    XCTAssertEqual(path, inheritedPath + ":" + homebrewDirectory)
+  }
+
+  func testMissingOrEmptyPathStillIncludesHomebrew() async throws {
+    for environment in [[:], ["PATH": ""]] {
+      let path = try await CommandRunner(environment: environment).run(
+        executable: URL(fileURLWithPath: "/usr/bin/printenv"), arguments: ["PATH"])
+
+      XCTAssertEqual(path, homebrewDirectory)
+    }
+  }
+
+  func testPreservesExistingPathOrderWithoutDuplicatingHomebrew() async throws {
+    let inheritedPath = "/custom/bin:\(homebrewDirectory):/usr/bin:/bin"
+    let path = try await CommandRunner(environment: ["PATH": inheritedPath]).run(
+      executable: URL(fileURLWithPath: "/usr/bin/printenv"), arguments: ["PATH"])
+
+    XCTAssertEqual(path, inheritedPath)
   }
 
   func testCancellationStopsAndReapsTheChild() async throws {
@@ -135,5 +160,13 @@ final class CommandRunnerTests: XCTestCase {
       return output
     }
     XCTAssertEqual(output, Set((0..<8).map(String.init)))
+  }
+
+  private var homebrewDirectory: String {
+    #if arch(arm64)
+      "/opt/homebrew/bin"
+    #else
+      "/usr/local/bin"
+    #endif
   }
 }
