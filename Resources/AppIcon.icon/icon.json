@@ -1,0 +1,70 @@
+{
+  "fill": {
+    "linear-gradient": [
+      "display-p3:0.20000,0.74000,0.82000,1.00000",
+      "display-p3:0.05000,0.33000,0.58000,1.00000"
+    ]
+  },
+  "groups": [
+    {
+      "layers": [
+        {
+          "image-name": "ribs.svg",
+          "name": "ribs"
+        },
+        {
+          "image-name": "shell.svg",
+          "name": "shell"
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.5
+      },
+      "translucency": {
+        "enabled": false,
+        "value": 0.4
+      }
+    },
+    {
+      "layers": [
+        {
+          "image-name": "pupils.svg",
+          "name": "pupils"
+        },
+        {
+          "image-name": "eyes.svg",
+          "name": "eyes",
+          "fill-specializations": [
+            {
+              "value": {
+                "solid": "extended-srgb:1.00000,1.00000,1.00000,1.00000"
+              }
+            },
+            {
+              "appearance": "dark",
+              "value": {
+                "solid": "extended-srgb:1.00000,1.00000,1.00000,1.00000"
+              }
+            }
+          ]
+        },
+        {
+          "image-name": "limbs.svg",
+          "name": "limbs"
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.5
+      },
+      "translucency": {
+        "enabled": true,
+        "value": 0.3
+      }
+    }
+  ],
+  "supported-platforms": {
+    "squares": ["macOS"]
+  }
+}
