@@ -2,6 +2,8 @@ import ServiceManagement
 import SwiftUI
 
 struct SettingsView: View {
+  let store: ContainerStore
+
   @State private var launchAtLoginStatus = SMAppService.mainApp.status
   @State private var isChangingLaunchAtLogin = false
   @State private var errorMessage: String?
@@ -35,10 +37,16 @@ struct SettingsView: View {
             .textSelection(.enabled)
         }
       }
+
+      RuntimeResourcesSection(store: store)
     }
     .formStyle(.grouped)
     .frame(width: 440)
     .fixedSize(horizontal: false, vertical: true)
+    // The popover polls only while it's open, so load the VM's current allocation here.
+    .task {
+      await store.refresh()
+    }
     .onReceive(
       NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
     ) { _ in

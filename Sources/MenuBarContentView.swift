@@ -6,6 +6,9 @@ struct MenuBarContentView: View {
 
   @State private var isRefreshingManually = false
 
+  @Environment(\.openSettings) private var openSettings
+  @Environment(\.dismiss) private var dismiss
+
   /// The space between the rules and the content between them. The project rows after the top
   /// rule are 24pt tall with their text set about 7pt in, hence the shorter top inset. The list
   /// keeps it inside its scroll view, so it scrolls right up to the rules.
@@ -240,7 +243,13 @@ struct MenuBarContentView: View {
       .keyboardShortcut("r")
       .disabled(store.isBusy || isRefreshingManually)
 
-      SettingsLink {
+      Button {
+        openSettings()
+        // A menu bar app isn't active while its popover is open, so Settings would open behind
+        // the frontmost app, with the popover still covering the menu bar.
+        NSApplication.shared.activate()
+        dismiss()
+      } label: {
         HStack {
           Text("Settings…")
           Spacer()

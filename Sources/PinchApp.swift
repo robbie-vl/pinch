@@ -34,7 +34,7 @@ struct PinchApp: App {
     .restorationBehavior(.disabled)
 
     Settings {
-      SettingsView()
+      SettingsView(store: store)
     }
   }
 }
