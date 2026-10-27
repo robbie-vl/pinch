@@ -19,6 +19,10 @@ From the Pinch directory:
 open dist/Pinch.app
 ```
 
+## Install
+
+This build is ad-hoc signed and not notarized. First launch may require approval in System Settings → Privacy & Security → Open Anyway.
+
 ## License
 
 [MIT](LICENSE) © 2026 Robbie Law.
