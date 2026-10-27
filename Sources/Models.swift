@@ -114,6 +114,10 @@ struct ContainerInfo: Equatable, Identifiable, Sendable {
   let displayName: String
   let ports: [PublishedPort]
   let state: ContainerState
+  /// The code of the last exit, for containers Docker reports as exited or restarting.
+  let exitCode: Int?
+  /// Times the restart policy has brought the container back since it was last started by hand.
+  let restartCount: Int
   let startedAt: Date?
   let finishedAt: Date?
 
@@ -123,22 +127,38 @@ struct ContainerInfo: Equatable, Identifiable, Sendable {
 
   /// What the row says about the container, as separate parts so the UI can space them like
   /// the figures beside them: how long a running container has been up, when a stopped one
-  /// stopped, and the state wherever the dot can't say it alone.
+  /// stopped, the state wherever the dot can't say it alone, and the exit code behind a failure.
   func activity(at now: Date) -> [String] {
     switch state {
     case .healthy, .running:
       [startedAt.map { "up \(Self.age(since: $0, now: now))" }].compactMap(\.self)
     case .unhealthy:
       [state.label, startedAt.map { "up \(Self.age(since: $0, now: now))" }].compactMap(\.self)
-    case .starting, .restarting, .paused, .created:
-      [state.label]
-    case .exited, .failed, .outOfMemory:
+    case .restarted:
       [
-        [state.label, finishedAt.map { "\(Self.age(since: $0, now: now)) ago" }]
-          .compactMap(\.self)
-          .joined(separator: " ")
-      ]
+        "\(restartCount) restart\(restartCount == 1 ? "" : "s")",
+        startedAt.map { "up \(Self.age(since: $0, now: now))" },
+      ].compactMap(\.self)
+    case .restarting:
+      [state.label, exitCodeLabel].compactMap(\.self)
+    case .starting, .paused, .created:
+      [state.label]
+    case .exited, .outOfMemory:
+      [stoppedLabel(at: now)]
+    case .failed:
+      [stoppedLabel(at: now), exitCodeLabel].compactMap(\.self)
     }
+  }
+
+  /// The state and how long ago the container stopped, as in "failed 2d ago".
+  private func stoppedLabel(at now: Date) -> String {
+    [state.label, finishedAt.map { "\(Self.age(since: $0, now: now)) ago" }]
+      .compactMap(\.self)
+      .joined(separator: " ")
+  }
+
+  private var exitCodeLabel: String? {
+    exitCode.map { "exit code \($0)" }
   }
 
   /// One unit, narrow, as in "3h" or "50m". A clock that runs ahead of Docker's reads as zero.
@@ -172,6 +192,8 @@ enum ContainerState: Equatable, Sendable {
   case running
   case starting
   case restarting
+  /// Running again after its restart policy brought it back from an exit.
+  case restarted
   case unhealthy
   case paused
   /// Created but never started.
@@ -200,7 +222,7 @@ enum ContainerState: Equatable, Sendable {
 
   var isRunning: Bool {
     switch self {
-    case .healthy, .running, .starting, .restarting, .unhealthy:
+    case .healthy, .running, .starting, .restarting, .restarted, .unhealthy:
       true
     case .paused, .created, .exited, .failed, .outOfMemory:
       false
@@ -209,13 +231,15 @@ enum ContainerState: Equatable, Sendable {
 
   var summaryGroup: SummaryGroup {
     switch self {
-    case .healthy, .running, .starting, .restarting:
+    case .healthy, .running, .starting:
       .running
     case .paused:
       .paused
     case .created, .exited:
       .stopped
-    case .unhealthy, .failed, .outOfMemory:
+    // Docker reports a container as restarting only while its restart policy brings it back
+    // after an exit, so it is crashing, or exiting when it is meant to keep running.
+    case .unhealthy, .restarting, .restarted, .failed, .outOfMemory:
       .issue
     }
   }
@@ -226,6 +250,7 @@ enum ContainerState: Equatable, Sendable {
     case .running: "running"
     case .starting: "starting"
     case .restarting: "restarting"
+    case .restarted: "restarted"
     case .unhealthy: "unhealthy"
     case .paused: "paused"
     case .created: "created"

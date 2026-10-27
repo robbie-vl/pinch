@@ -54,7 +54,8 @@ struct DockerSnapshotParser: Sendable {
     return Dictionary(samples, uniquingKeysWith: { first, _ in first })
   }
 
-  /// Groups records into projects, adding what only `inspect` reports: timestamps and OOM kills.
+  /// Groups records into projects, adding what only `inspect` reports: timestamps, OOM kills and
+  /// restarts.
   func projects(
     from records: [DockerContainerRecord],
     details: [String: ContainerDetail]
@@ -134,7 +135,7 @@ struct DockerContainerRecord: Equatable, Sendable {
   let state: String
   let status: String
   let health: String
-  /// Set for exited containers only.
+  /// Set for exited and restarting containers only.
   let exitCode: Int?
 
   fileprivate init(_ raw: RawContainerLine) throws {
@@ -148,8 +149,10 @@ struct DockerContainerRecord: Equatable, Sendable {
     status = raw.status
     health = raw.health.lowercased()
 
-    if state == "exited" {
-      guard let match = raw.status.firstMatch(of: #/^Exited \((\d+)\)/#), let code = Int(match.1)
+    // Docker writes the last exit code into both statuses, as in "Restarting (1) 2 seconds ago".
+    if state == "exited" || state == "restarting" {
+      guard let match = raw.status.firstMatch(of: #/^(?:Exited|Restarting) \((\d+)\)/#),
+        let code = Int(match.1)
       else {
         throw DockerSnapshotParsingError.missingExitCode(status: raw.status)
       }
@@ -171,7 +174,7 @@ enum DockerSnapshotParsingError: LocalizedError {
     case .invalidRecord(let line, let underlying):
       "Docker returned invalid container data on line \(line): \(underlying.localizedDescription)"
     case .missingExitCode(let status):
-      "Docker reported an exited container without an exit code: \(status)"
+      "Docker reported a stopped or restarting container without an exit code: \(status)"
     case .invalidUsage(let value):
       "Docker reported resource usage in an unexpected form: \(value)"
     case .invalidPorts(let value):
@@ -188,12 +191,15 @@ struct ContainerDetail: Equatable, Sendable {
   /// Nil until the container first stops.
   let finishedAt: Date?
   let isOutOfMemory: Bool
+  /// Times the restart policy has brought the container back since it was last started by hand.
+  let restartCount: Int
 
   fileprivate init(_ raw: RawDetailLine) throws {
     id = raw.id
     startedAt = try Self.date(raw.startedAt)
     finishedAt = try Self.date(raw.finishedAt)
     isOutOfMemory = raw.oomKilled
+    restartCount = raw.restartCount
   }
 
   /// Docker writes Go's zero time for events that haven't happened.
@@ -208,6 +214,7 @@ private struct RawDetailLine: Decodable {
   let startedAt: String
   let finishedAt: String
   let oomKilled: Bool
+  let restartCount: Int
 }
 
 private struct RawUsageLine: Decodable {
@@ -266,7 +273,12 @@ extension ContainerInfo {
       project: project,
       displayName: Self.displayName(for: record, isReplica: isReplica),
       ports: record.ports,
-      state: ContainerState(record: record, isOutOfMemory: detail?.isOutOfMemory ?? false),
+      state: ContainerState(
+        record: record,
+        isOutOfMemory: detail?.isOutOfMemory ?? false,
+        restartCount: detail?.restartCount ?? 0),
+      exitCode: record.exitCode,
+      restartCount: detail?.restartCount ?? 0,
       startedAt: detail?.startedAt,
       finishedAt: detail?.finishedAt
     )
@@ -291,14 +303,18 @@ extension ContainerState {
   /// SIGTERM or the image's STOPSIGNAL (often SIGINT), then SIGKILL after the timeout.
   private static let stopExitCodes: Set<Int> = [0, 130, 137, 143]
 
-  fileprivate init(record: DockerContainerRecord, isOutOfMemory: Bool) {
+  fileprivate init(record: DockerContainerRecord, isOutOfMemory: Bool, restartCount: Int) {
     switch (record.state, record.health) {
+    case ("running", "unhealthy"):
+      self = .unhealthy
+    // Docker resets the count whenever someone starts the container, so any restart since
+    // means it exited when it was meant to keep running, even if it looks healthy again now.
+    case ("running", _) where restartCount > 0:
+      self = .restarted
     case ("running", "healthy"):
       self = .healthy
     case ("running", "starting"):
       self = .starting
-    case ("running", "unhealthy"):
-      self = .unhealthy
     case ("running", _):
       self = .running
     case ("restarting", _):

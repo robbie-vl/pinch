@@ -456,6 +456,8 @@ private struct ContainerRow: View {
   let actionsEnabled: Bool
   let onAction: (ContainerAction) -> Void
 
+  @Environment(\.openWindow) private var openWindow
+
   /// Lines up the detail line with the name: the dot's width plus the gap after it.
   private static let detailIndent: CGFloat = 15
 
@@ -521,6 +523,16 @@ private struct ContainerRow: View {
     .padding(.leading, 8)
     .padding(.trailing, 2)
     .padding(.vertical, 3)
+    // The whole row, not just its text, answers a right-click.
+    .contentShape(.rect)
+    .contextMenu {
+      Button("Show Logs") {
+        openWindow(value: ContainerLogsTarget(id: container.id, name: container.name))
+        // A menu bar app isn't active while its popover is open, so the window would open
+        // behind the frontmost app.
+        NSApplication.shared.activate()
+      }
+    }
     .accessibilityElement(children: .contain)
     .accessibilityLabel(accessibilityLabel)
   }
@@ -664,7 +676,7 @@ private struct ContainerActionRail: View {
 
   private var suspendAction: ContainerAction? {
     switch state {
-    case .healthy, .running, .starting, .unhealthy:
+    case .healthy, .running, .starting, .restarted, .unhealthy:
       .pause
     case .paused:
       .unpause
@@ -711,9 +723,9 @@ private struct StatusDot: View {
     switch state {
     case .healthy, .running:
       .green
-    case .starting, .restarting:
+    case .starting:
       .orange
-    case .unhealthy, .failed, .outOfMemory:
+    case .unhealthy, .restarting, .restarted, .failed, .outOfMemory:
       .red
     case .paused, .created, .exited:
       .secondary

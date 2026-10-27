@@ -179,6 +179,18 @@ final class DockerSnapshotParserTests: XCTestCase {
       ])
   }
 
+  func testKeepsTheExitCodeOfExitedAndRestartingContainers() throws {
+    let input = [
+      line(id: "failed", state: "exited", status: "Exited (139) 3 minutes ago"),
+      line(id: "restarting", state: "restarting", status: "Restarting (1) 2 seconds ago"),
+      line(id: "running"),
+    ]
+
+    let exitCodes = Dictionary(
+      uniqueKeysWithValues: try projects(input).flatMap(\.containers).map { ($0.id, $0.exitCode) })
+    XCTAssertEqual(exitCodes, ["failed": 139, "restarting": 1, "running": nil])
+  }
+
   func testReadsTimesAndOutOfMemoryKillsFromInspect() throws {
     let parser = DockerSnapshotParser()
     let records = try parser.parse(
@@ -189,9 +201,9 @@ final class DockerSnapshotParserTests: XCTestCase {
       ].joined(separator: "\n"))
     let details = try parser.parseDetails(
       """
-      {"id":"oom","startedAt":"2026-10-26T15:00:00.123456789Z","finishedAt":"2026-10-26T16:00:00Z","oomKilled":true}
-      {"id":"stopped","startedAt":"2026-10-26T15:00:00Z","finishedAt":"2026-10-26T16:00:00Z","oomKilled":false}
-      {"id":"new","startedAt":"0001-01-01T00:00:00Z","finishedAt":"0001-01-01T00:00:00Z","oomKilled":false}
+      {"id":"oom","startedAt":"2026-10-26T15:00:00.123456789Z","finishedAt":"2026-10-26T16:00:00Z","oomKilled":true,"restartCount":0}
+      {"id":"stopped","startedAt":"2026-10-26T15:00:00Z","finishedAt":"2026-10-26T16:00:00Z","oomKilled":false,"restartCount":0}
+      {"id":"new","startedAt":"0001-01-01T00:00:00Z","finishedAt":"0001-01-01T00:00:00Z","oomKilled":false,"restartCount":0}
       """)
 
     let containers = Dictionary(
@@ -206,14 +218,43 @@ final class DockerSnapshotParserTests: XCTestCase {
     XCTAssertNil(containers["new"]?.finishedAt)
   }
 
+  /// A container that crashes after running for a while is back up before the next refresh,
+  /// so Docker shows it as running. Its restart count, which Docker resets whenever someone
+  /// starts the container, is what gives it away.
+  func testCountsRunningContainersTheirRestartPolicyBroughtBackAsIssues() throws {
+    let parser = DockerSnapshotParser()
+    let records = try parser.parse(
+      [
+        line(id: "looping", status: "Up 8 seconds (healthy)", health: "healthy"),
+        line(id: "steady", status: "Up 2 hours"),
+        line(id: "unhealthy", status: "Up 8 seconds (unhealthy)", health: "unhealthy"),
+      ].joined(separator: "\n"))
+    let details = try parser.parseDetails(
+      """
+      {"id":"looping","startedAt":"2026-10-26T15:00:00Z","finishedAt":"2026-10-26T14:59:59Z","oomKilled":false,"restartCount":3}
+      {"id":"steady","startedAt":"2026-10-26T13:00:00Z","finishedAt":"0001-01-01T00:00:00Z","oomKilled":false,"restartCount":0}
+      {"id":"unhealthy","startedAt":"2026-10-26T15:00:00Z","finishedAt":"2026-10-26T14:59:59Z","oomKilled":false,"restartCount":1}
+      """)
+
+    let containers = Dictionary(
+      uniqueKeysWithValues: parser.projects(from: records, details: details)[0].containers.map {
+        ($0.id, $0)
+      })
+    XCTAssertEqual(containers["looping"]?.state, .restarted)
+    XCTAssertEqual(containers["looping"]?.restartCount, 3)
+    XCTAssertEqual(containers["steady"]?.state, .running)
+    XCTAssertEqual(containers["unhealthy"]?.state, .unhealthy)
+  }
+
   func testDescribesActivityBesideTheName() {
     let now = Date(timeIntervalSince1970: 1_000_000)
-    func activity(_ state: ContainerState, started: TimeInterval?, finished: TimeInterval?)
-      -> [String]
-    {
+    func activity(
+      _ state: ContainerState, exitCode: Int? = nil, restartCount: Int = 0,
+      started: TimeInterval?, finished: TimeInterval?
+    ) -> [String] {
       ContainerInfo(
         id: "id", name: "name", project: "project", displayName: "name", ports: [],
-        state: state,
+        state: state, exitCode: exitCode, restartCount: restartCount,
         startedAt: started.map { now.addingTimeInterval(-$0) },
         finishedAt: finished.map { now.addingTimeInterval(-$0) }
       ).activity(at: now)
@@ -222,26 +263,40 @@ final class DockerSnapshotParserTests: XCTestCase {
     XCTAssertEqual(activity(.healthy, started: 3 * 3600 + 900, finished: nil), ["up 3h"])
     XCTAssertEqual(activity(.running, started: 8, finished: nil), ["up 8s"])
     XCTAssertEqual(activity(.unhealthy, started: 120, finished: nil), ["unhealthy", "up 2m"])
+    XCTAssertEqual(
+      activity(.restarted, restartCount: 1, started: 8, finished: 9), ["1 restart", "up 8s"])
+    XCTAssertEqual(
+      activity(.restarted, restartCount: 3, started: 8, finished: 9), ["3 restarts", "up 8s"])
     XCTAssertEqual(activity(.exited, started: nil, finished: 3600), ["stopped 1h ago"])
+    XCTAssertEqual(
+      activity(.failed, exitCode: 1, started: nil, finished: 2 * 86400),
+      ["failed 2d ago", "exit code 1"])
+    // Docker reports no exit code for a dead container.
     XCTAssertEqual(activity(.failed, started: nil, finished: 2 * 86400), ["failed 2d ago"])
+    XCTAssertEqual(
+      activity(.restarting, exitCode: 3, started: 1, finished: 2), ["restarting", "exit code 3"])
+    XCTAssertEqual(
+      activity(.outOfMemory, exitCode: 137, started: nil, finished: 60), ["out of memory 1m ago"])
     XCTAssertEqual(activity(.paused, started: 3600, finished: nil), ["paused"])
     XCTAssertEqual(activity(.created, started: nil, finished: nil), ["created"])
     XCTAssertEqual(activity(.running, started: nil, finished: nil), [])
   }
 
-  func testRejectsExitedContainersWithoutAnExitCode() {
-    XCTAssertThrowsError(
-      try DockerSnapshotParser().parse(line(id: "odd", state: "exited", status: "Exited"))
-    ) { error in
-      guard case DockerSnapshotParsingError.invalidRecord(let line, _) = error else {
-        return XCTFail("Unexpected error: \(error)")
+  func testRejectsExitedAndRestartingContainersWithoutAnExitCode() {
+    for (state, status) in [("exited", "Exited"), ("restarting", "Restarting")] {
+      XCTAssertThrowsError(
+        try DockerSnapshotParser().parse(line(id: "odd", state: state, status: status))
+      ) { error in
+        guard case DockerSnapshotParsingError.invalidRecord(let line, _) = error else {
+          return XCTFail("Unexpected error: \(error)")
+        }
+        XCTAssertEqual(line, 1)
       }
-      XCTAssertEqual(line, 1)
     }
   }
 
-  /// Every container counts once, so paused containers show up and unhealthy ones are not
-  /// also counted as running.
+  /// Every container counts once, so paused containers show up and unhealthy or crash-looping
+  /// ones are not also counted as running.
   func testProjectSummaryCountsEachContainerInOneGroup() {
     func project(_ states: [ContainerState]) -> ContainerProject {
       ContainerProject(
@@ -249,15 +304,18 @@ final class DockerSnapshotParserTests: XCTestCase {
         containers: states.enumerated().map { index, state in
           ContainerInfo(
             id: "\(index)", name: "\(index)", project: "project", displayName: "\(index)",
-            ports: [], state: state, startedAt: nil, finishedAt: nil)
+            ports: [], state: state, exitCode: nil, restartCount: 0, startedAt: nil,
+            finishedAt: nil)
         })
     }
 
     XCTAssertEqual(project([.paused, .paused]).summary, "2 paused")
     XCTAssertEqual(
-      project([.healthy, .unhealthy, .restarting, .paused, .exited, .created, .outOfMemory])
-        .summary,
-      "2 running · 1 paused · 2 stopped · 2 issues")
+      project([
+        .healthy, .unhealthy, .restarting, .restarted, .paused, .exited, .created, .outOfMemory,
+      ])
+      .summary,
+      "1 running · 1 paused · 2 stopped · 4 issues")
   }
 
   func testNamesComposeReplicasByNumber() throws {
