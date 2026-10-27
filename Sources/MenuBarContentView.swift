@@ -6,6 +6,11 @@ struct MenuBarContentView: View {
 
   @State private var isRefreshingManually = false
 
+  /// The space between the rules and the content between them. The project rows after the top
+  /// rule are 24pt tall with their text set about 7pt in, hence the shorter top inset. The list
+  /// keeps it inside its scroll view, so it scrolls right up to the rules.
+  private static let contentInsets = EdgeInsets(top: 4, leading: 0, bottom: 10, trailing: 0)
+
   var body: some View {
     VStack(spacing: 0) {
       header
@@ -18,8 +23,10 @@ struct MenuBarContentView: View {
       }
 
       SectionDivider()
+        .padding(.top, 10)
       containerContent
       SectionDivider()
+        .padding(.bottom, 4)
       footer
     }
     .frame(width: 440)
@@ -114,8 +121,10 @@ struct MenuBarContentView: View {
         // beyond which the list scrolls.
         ScrollView {
           projectList(snapshot)
+            .padding(Self.contentInsets)
         }
         .scrollBounceBehavior(.basedOnSize)
+        .modifier(ScrollEdgeFade())
         .frame(maxHeight: 560)
         .fixedSize(horizontal: false, vertical: true)
       }
@@ -202,6 +211,7 @@ struct MenuBarContentView: View {
     .frame(maxWidth: .infinity)
     .padding(.horizontal, 24)
     .padding(.vertical, 22)
+    .padding(Self.contentInsets)
   }
 
   private var footer: some View {
@@ -261,16 +271,52 @@ struct MenuBarContentView: View {
   }
 }
 
-/// The rule between the header, the container list and the footer. It owns the spacing on both
-/// sides so the two rules match: the views next to it add no padding of their own. The rows that
-/// follow it are 24pt tall with their text set about 7pt in, hence the shorter bottom inset.
+/// The rule between the header, the container list and the footer.
 private struct SectionDivider: View {
   var body: some View {
     Divider()
       // The text edge shared by the header, project names and footer rows.
       .padding(.horizontal, 14)
-      .padding(.top, 10)
-      .padding(.bottom, 4)
+  }
+}
+
+/// Fades a scroll view's content out at each edge with more beyond it, so a row cut off at the
+/// edge reads as "keep scrolling" rather than a hard clip. The fade stays inside the scroll view:
+/// the header and footer around it stay clean.
+struct ScrollEdgeFade: ViewModifier {
+  @State private var fadedEdges: Edge.Set = []
+
+  private let fadeHeight: CGFloat = 36
+
+  func body(content: Content) -> some View {
+    content
+      .onScrollGeometryChange(for: Edge.Set.self, of: Self.fadedEdges) { _, edges in
+        fadedEdges = edges
+      }
+      .mask {
+        VStack(spacing: 0) {
+          LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom)
+            .frame(height: fadedEdges.contains(.top) ? fadeHeight : 0)
+          Rectangle()
+          LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom)
+            .frame(height: fadedEdges.contains(.bottom) ? fadeHeight : 0)
+        }
+        .animation(.easeOut(duration: 0.15), value: fadedEdges)
+      }
+  }
+
+  /// The edges with content beyond them. Scrolling to an end can settle a hair short of it, so
+  /// anything under half a point, less than a pixel on any display, doesn't count.
+  static func fadedEdges(for geometry: ScrollGeometry) -> Edge.Set {
+    let tolerance: CGFloat = 0.5
+    var edges: Edge.Set = []
+    if geometry.visibleRect.minY > tolerance {
+      edges.insert(.top)
+    }
+    if geometry.visibleRect.maxY < geometry.contentSize.height - tolerance {
+      edges.insert(.bottom)
+    }
+    return edges
   }
 }
 
