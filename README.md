@@ -6,7 +6,11 @@
 
 <p align="center">Your containers, a pinch away.</p>
 
-Pinch is a native macOS menu bar app for Colima. See container status, CPU and memory usage, open published ports, and start, stop or restart containers without opening a terminal.
+Pinch is a lightweight, native macOS menu bar app for Colima. See container status, CPU and memory usage, open published ports, and start, stop or restart containers without opening a terminal.
+
+## Lightweight by design
+
+Pinch is a single SwiftUI binary with no third-party dependencies. It only talks to Docker while its popover is open, refreshing the container list every 5 seconds and sampling usage with `docker stats`. Close the popover and that work stops, so in the background Pinch sits at about 15 MB of memory and no CPU.
 
 ## Build and run
 
