@@ -32,6 +32,16 @@ struct RuntimeInfo: Equatable, Sendable {
     state == .running ? "Running" : "Stopped"
   }
 
+  /// The allocation in Colima's units, or nil while Colima doesn't report it, as before the VM's
+  /// first start.
+  var resources: RuntimeResources? {
+    guard let cpus, let memoryBytes else {
+      return nil
+    }
+    return RuntimeResources(
+      cpus: cpus, memoryGiB: Double(memoryBytes) / Double(RuntimeResources.bytesPerGiB))
+  }
+
   /// Allocation and engine facts, without the state, so the UI can lead with a transition
   /// such as "Starting…" instead.
   var details: [String] {
@@ -57,6 +67,29 @@ struct RuntimeInfo: Equatable, Sendable {
 
   private static func bytes(_ count: Int64) -> String {
     count.formatted(.byteCount(style: .memory))
+  }
+}
+
+/// The CPUs and memory Colima gives the VM, in the units its `start` flags take. Memory can be
+/// a fraction of a GiB, such as 1.5.
+struct RuntimeResources: Equatable, Sendable {
+  var cpus: Int
+  var memoryGiB: Double
+
+  static let bytesPerGiB: Int64 = 1 << 30
+
+  var memoryLabel: String {
+    Int64((memoryGiB * Double(Self.bytesPerGiB)).rounded()).formatted(.byteCount(style: .memory))
+  }
+
+  /// The next whole GiB up, so a fractional allocation such as 1.5 GiB steps to 2.
+  var memoryGiBAbove: Double {
+    (memoryGiB + 1).rounded(.down)
+  }
+
+  /// The next whole GiB down, so a fractional allocation such as 1.5 GiB steps to 1.
+  var memoryGiBBelow: Double {
+    (memoryGiB - 1).rounded(.up)
   }
 }
 

@@ -116,6 +116,37 @@ final class ContainerStore {
     await load()
   }
 
+  /// Gives the VM a new allocation. A VM only takes one on as it boots, so a running VM restarts
+  /// and a stopped one starts. Throws, unlike the popover's commands, so Settings can show the
+  /// failure beside the button that caused it.
+  func applyResources(_ resources: RuntimeResources) async throws {
+    guard !isBusy, let shownState = snapshot?.runtime.state else {
+      return
+    }
+
+    // Settings doesn't poll, so its snapshot may predate a start or stop from the terminal.
+    // Skip rather than, say, restart a VM the button offered to start.
+    await refresh()
+    guard !isBusy, snapshot?.runtime.state == shownState else {
+      return
+    }
+
+    runtimeTransition = shownState == .running ? .stopping : .starting
+    defer { runtimeTransition = nil }
+
+    do {
+      if shownState == .running {
+        try await client.setRuntimeRunning(false)
+        runtimeTransition = .starting
+      }
+      try await client.startRuntime(with: resources)
+    } catch {
+      await load()
+      throw error
+    }
+    await load()
+  }
+
   func perform(_ action: ContainerAction, on container: ContainerInfo) async {
     guard !isBusy else {
       return

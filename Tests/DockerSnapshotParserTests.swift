@@ -41,6 +41,30 @@ final class DockerSnapshotParserTests: XCTestCase {
     XCTAssertEqual(stopped.details, ["1 CPU", "2 GB"])
   }
 
+  /// Colima takes memory in fractions of a GiB, so Settings shows 1.5 GiB as the popover does,
+  /// not rounded to a value Colima would then save.
+  func testKeepsAFractionalMemoryAllocation() throws {
+    let runtime = RuntimeInfo(
+      state: .stopped, cpus: 2, memoryBytes: 1_610_612_736, memoryUsedBytes: nil,
+      engineVersion: nil)
+
+    let resources = try XCTUnwrap(runtime.resources)
+    XCTAssertEqual(resources.memoryGiB, 1.5)
+    XCTAssertEqual(runtime.details, ["2 CPUs", resources.memoryLabel])
+  }
+
+  func testStepsMemoryToTheNearestWholeGiBEitherSide() {
+    let fractional = RuntimeResources(cpus: 2, memoryGiB: 1.5)
+    XCTAssertEqual(fractional.memoryGiBAbove, 2)
+    XCTAssertEqual(fractional.memoryGiBBelow, 1)
+
+    let whole = RuntimeResources(cpus: 2, memoryGiB: 2)
+    XCTAssertEqual(whole.memoryGiBAbove, 3)
+    XCTAssertEqual(whole.memoryGiBBelow, 1)
+
+    XCTAssertEqual(RuntimeResources(cpus: 2, memoryGiB: 0.25).memoryGiBAbove, 1)
+  }
+
   func testReadsUsedMemoryFromTheVM() throws {
     let meminfo = """
       MemTotal:        2005448 kB

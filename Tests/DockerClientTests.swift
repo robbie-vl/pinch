@@ -17,6 +17,67 @@ final class DockerClientTests: XCTestCase {
       ])
   }
 
+  func testApplyingResourcesRestartsARunningVMWithThem() async throws {
+    let fixture = try DockerCommandFixture()
+    let store = ContainerStore(client: fixture.client)
+    await store.refresh()
+
+    try await store.applyResources(RuntimeResources(cpus: 4, memoryGiB: 8))
+
+    XCTAssertEqual(
+      try fixture.commands().filter { $0.contains(" start") || $0.contains(" stop") },
+      [
+        "colima --profile default stop",
+        "colima --profile default start --cpus 4 --memory 8.0",
+      ])
+    XCTAssertNil(store.runtimeTransition)
+  }
+
+  func testApplyingResourcesStartsAStoppedVMWithThem() async throws {
+    let fixture = try DockerCommandFixture()
+    try fixture.setProfileStatus("Stopped")
+    let store = ContainerStore(client: fixture.client)
+    await store.refresh()
+
+    try await store.applyResources(RuntimeResources(cpus: 4, memoryGiB: 8))
+
+    XCTAssertEqual(
+      try fixture.commands().filter { $0.contains(" start") || $0.contains(" stop") },
+      ["colima --profile default start --cpus 4 --memory 8.0"])
+  }
+
+  /// Colima saves every flag it's given, so a value the user didn't change must go back as is.
+  func testChangingOnlyCPUsKeepsAFractionalMemoryAllocation() async throws {
+    let fixture = try DockerCommandFixture()
+    try fixture.setProfileStatus("Stopped", memoryBytes: 1_610_612_736)
+    let store = ContainerStore(client: fixture.client)
+    await store.refresh()
+    var resources = try XCTUnwrap(store.snapshot?.runtime.resources)
+    resources.cpus = 4
+
+    try await store.applyResources(resources)
+
+    XCTAssertEqual(
+      try fixture.commands().filter { $0.contains(" start") },
+      ["colima --profile default start --cpus 4 --memory 1.5"])
+  }
+
+  /// Settings doesn't poll, so the VM may have started from the terminal since it last loaded.
+  /// The button offered a start, so it mustn't restart the VM and stop its containers.
+  func testApplyingResourcesSkipsAVMThatChangedStateSinceItWasShown() async throws {
+    let fixture = try DockerCommandFixture()
+    try fixture.setProfileStatus("Stopped")
+    let store = ContainerStore(client: fixture.client)
+    await store.refresh()
+    try fixture.setProfileStatus("Running")
+
+    try await store.applyResources(RuntimeResources(cpus: 4, memoryGiB: 8))
+
+    XCTAssertFalse(
+      try fixture.commands().contains { $0.contains(" start") || $0.contains(" stop") })
+    XCTAssertEqual(store.snapshot?.runtime.state, .running)
+  }
+
   func testEveryDockerOperationUsesTheSocketReportedByTheDefaultProfile() async throws {
     let fixture = try DockerCommandFixture()
 
@@ -144,7 +205,7 @@ private final class DockerCommandFixture {
       printf 'colima %s\n' "$*" >> "$fixture/commands"
       if [ "$1" = '--profile' ]; then shift 2; fi
       case "$1" in
-        list) printf '%s\n' '{"name":"default","status":"Running"}' ;;
+        list) /bin/cat "$fixture/list.json" ;;
         status) /bin/cat "$fixture/status.json" ;;
         ssh) printf 'MemTotal: 1024 kB\nMemAvailable: 512 kB\n' ;;
         start|stop) ;;
@@ -182,10 +243,17 @@ private final class DockerCommandFixture {
     client = DockerClient(
       locator: ExecutableLocator(environment: environment),
       runner: CommandRunner(environment: environment))
+    try setProfileStatus("Running")
   }
 
   deinit {
     try? FileManager.default.removeItem(at: directory)
+  }
+
+  /// What `colima list` reports for the default profile.
+  func setProfileStatus(_ status: String, memoryBytes: Int64 = 2_147_483_648) throws {
+    try #"{"name":"default","status":"\#(status)","cpus":2,"memory":\#(memoryBytes)}"#.write(
+      to: directory.appendingPathComponent("list.json"), atomically: true, encoding: .utf8)
   }
 
   func commands() throws -> [String] {

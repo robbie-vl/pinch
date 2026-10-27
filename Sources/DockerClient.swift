@@ -108,6 +108,18 @@ struct DockerClient: Sendable {
       executable: colima, arguments: Self.colimaArguments([action]), timeout: .seconds(300))
   }
 
+  /// Starts the VM with this allocation. Colima also saves it to the profile's config, so later
+  /// starts, from Pinch or the terminal, keep it.
+  func startRuntime(with resources: RuntimeResources) async throws {
+    let colima = try locator.locate("colima")
+    _ = try await runner.run(
+      executable: colima,
+      arguments: Self.colimaArguments([
+        "start", "--cpus", String(resources.cpus), "--memory", String(resources.memoryGiB),
+      ]),
+      timeout: .seconds(300))
+  }
+
   func perform(_ action: ContainerAction, on containerID: String) async throws {
     let host = try await dockerHost(colima: locator.locate("colima"))
     let docker = try locator.locate("docker")
