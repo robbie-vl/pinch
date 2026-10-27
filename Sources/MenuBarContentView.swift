@@ -96,7 +96,9 @@ struct MenuBarContentView: View {
         emptyState(
           title: "Starting Colima…",
           detail: "This can take a minute."
-        )
+        ) {
+          ScuttlingCrab()
+        }
       } else if snapshot.runtime.state == .stopped {
         emptyState(
           title: "Colima is stopped",
@@ -176,8 +178,7 @@ struct MenuBarContentView: View {
 
   private func emptyState(title: String, detail: String) -> some View {
     emptyState(title: title, detail: detail) {
-      HermitGlyph()
-        .fill(.quaternary)
+      PeekingCrab()
     }
   }
 
@@ -674,8 +675,8 @@ private struct StatusDot: View {
   }
 }
 
-/// The loading crab: a few quick sideways steps, a pause, and back, the way a hermit crab
-/// tests the water before leaving its shell.
+/// The busy crab, shown while Pinch loads or Colima starts: a few quick sideways steps, a
+/// pause, and back, the way a hermit crab tests the water before leaving its shell.
 private struct ScuttlingCrab: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -700,6 +701,33 @@ private struct ScuttlingCrab: View {
           LinearKeyframe(4, duration: 0.52)
           CubicKeyframe(2, duration: 0.12)
           CubicKeyframe(0, duration: 0.12)
+        }
+      }
+    }
+  }
+}
+
+/// The resting crab, for empty states: every few seconds it ducks into its shell and peeks
+/// back out. Dimmer and mostly still, so it never reads as the busy crab's scuttle.
+private struct PeekingCrab: View {
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+  var body: some View {
+    if reduceMotion {
+      HermitGlyph().fill(.quaternary)
+    } else {
+      KeyframeAnimator(initialValue: CGFloat(0), repeating: true) { retraction in
+        HermitGlyph(retraction: retraction).fill(.quaternary)
+      } keyframes: { _ in
+        KeyframeTrack {
+          // Out first, so the popover doesn't open on a moving crab.
+          LinearKeyframe(0, duration: 4)
+          CubicKeyframe(1, duration: 0.2)
+          LinearKeyframe(1, duration: 0.8)
+          // Halfway up for a cautious look, then all the way out.
+          CubicKeyframe(0.45, duration: 0.3)
+          LinearKeyframe(0.45, duration: 0.6)
+          CubicKeyframe(0, duration: 0.25)
         }
       }
     }
