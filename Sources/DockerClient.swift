@@ -58,7 +58,7 @@ struct DockerClient: Sendable {
     )
   }
 
-  /// Start and finish times and OOM kills, which `docker container ls` cannot report.
+  /// Start and finish times, OOM kills and restarts, which `docker container ls` cannot report.
   private func details(of containerIDs: [String], docker: URL, host: String) async throws
     -> [String: ContainerDetail]
   {
@@ -86,6 +86,19 @@ struct DockerClient: Sendable {
         ["stats", "--no-stream", "--format", Self.usageFormat], host: host)
     )
     return try parser.parseUsage(output)
+  }
+
+  /// The most recent lines a container has written, stdout and stderr interleaved, as plain
+  /// text.
+  func loadLogs(of containerID: String) async throws -> String {
+    let host = try await dockerHost(colima: locator.locate("colima"))
+    let docker = try locator.locate("docker")
+    let output = try await runner.run(
+      executable: docker,
+      arguments: Self.dockerArguments(
+        ["logs", "--tail", String(Self.logLineLimit), containerID], host: host)
+    )
+    return Self.removingTerminalEscapes(from: output)
   }
 
   func setRuntimeRunning(_ shouldRun: Bool) async throws {
@@ -138,6 +151,16 @@ struct DockerClient: Sendable {
     return (total - available) * 1024
   }
 
+  /// Drops the ECMA-48 escape sequences that colour text, move the cursor or set the title:
+  /// control sequences (`ESC [`), operating system commands (`ESC ]`, ended by BEL or `ESC \`),
+  /// and the two-byte escapes such as a character set switch.
+  static func removingTerminalEscapes(from output: String) -> String {
+    output.replacing(#/\e(?:\[[0-?]*[ -/]*[@-~]|\][^\a\e]*(?:\a|\e\\)|[ -/]*[0-~])/#, with: "")
+  }
+
+  /// How far back `loadLogs` reaches, so a chatty container can't flood the window.
+  static let logLineLimit = 200
+
   private static let colimaProfile = "default"
 
   private static func colimaArguments(_ arguments: [String]) -> [String] {
@@ -175,7 +198,7 @@ struct DockerClient: Sendable {
     #"{"name":{{json .Name}},"cpu":{{json .CPUPerc}},"memory":{{json .MemUsage}}}"#
 
   private static let detailFormat =
-    #"{"id":{{json .Id}},"startedAt":{{json .State.StartedAt}},"finishedAt":{{json .State.FinishedAt}},"oomKilled":{{json .State.OOMKilled}}}"#
+    #"{"id":{{json .Id}},"startedAt":{{json .State.StartedAt}},"finishedAt":{{json .State.FinishedAt}},"oomKilled":{{json .State.OOMKilled}},"restartCount":{{json .RestartCount}}}"#
 
   private static let containerFormat =
     #"{"id":{{json .ID}},"name":{{json .Names}},"project":{{json (.Label "com.docker.compose.project")}},"service":{{json (.Label "com.docker.compose.service")}},"number":{{json (.Label "com.docker.compose.container-number")}},"ports":{{json .Ports}},"state":{{json .State}},"status":{{json .Status}},"health":{{json .HealthStatus}}}"#

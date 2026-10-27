@@ -23,13 +23,17 @@ final class DockerClientTests: XCTestCase {
     let snapshot = try await fixture.client.loadSnapshot()
     _ = try await fixture.client.loadUsage()
     try await fixture.client.perform(.stop, on: "abc123")
+    let logs = try await fixture.client.loadLogs(of: "abc123")
 
     XCTAssertEqual(snapshot.containers.map(\.id), ["abc123"])
+    XCTAssertEqual(logs, "listening on 8080")
     let commands = try fixture.commands()
     let dockerCommands = commands.filter { $0.hasPrefix("docker ") }
-    XCTAssertEqual(dockerCommands.count, 5)
+    XCTAssertEqual(dockerCommands.count, 6)
     XCTAssertTrue(
       dockerCommands.allSatisfy { $0.hasPrefix("docker --host unix:///tmp/pinch-test.sock ") })
+    XCTAssertTrue(
+      dockerCommands.contains("docker --host unix:///tmp/pinch-test.sock logs --tail 200 abc123"))
     XCTAssertTrue(commands.contains("colima --profile default ssh -- cat /proc/meminfo"))
     XCTAssertTrue(commands.contains("colima --profile default status --json"))
   }
@@ -55,6 +59,7 @@ final class DockerClientTests: XCTestCase {
         { _ = try await fixture.client.loadSnapshot() },
         { _ = try await fixture.client.loadUsage() },
         { try await fixture.client.perform(.stop, on: "abc123") },
+        { _ = try await fixture.client.loadLogs(of: "abc123") },
       ]
       for operation in operations {
         do {
@@ -65,6 +70,28 @@ final class DockerClientTests: XCTestCase {
         }
       }
     }
+  }
+
+  /// Apps that colour their output keep doing so when Docker isn't attached to a terminal,
+  /// and the logs window shows plain text.
+  func testRemovesTerminalEscapeSequencesFromLogs() {
+    let output = [
+      "\u{1B}[32mINFO\u{1B}[0m server started",
+      "\u{1B}[1;31mERROR\u{1B}[m connection refused",
+      "\u{1B}[2K\u{1B}[1Gdownloading",
+      "\u{1B}]8;;https://example.com\u{1B}\\docs\u{1B}]8;;\u{1B}\\ and \u{1B}]0;title\u{07}done",
+      "\u{1B}(Bplain [32m stays",
+    ].joined(separator: "\n")
+
+    XCTAssertEqual(
+      DockerClient.removingTerminalEscapes(from: output),
+      """
+      INFO server started
+      ERROR connection refused
+      downloading
+      docs and done
+      plain [32m stays
+      """)
   }
 
   func testCancellingRefreshStopsTheCommandAndClearsTheInFlightState() async throws {
@@ -132,9 +159,10 @@ private final class DockerCommandFixture {
       case "$1 $2" in
         'version --format') printf '29.5.2\n' ;;
         'container ls') printf '%s\n' '{"id":"abc123","name":"test","project":"","service":"","number":"","ports":"","state":"running","status":"Up 1 minute","health":""}' ;;
-        'container inspect') printf '%s\n' '{"id":"abc123","startedAt":"2026-10-26T15:00:00Z","finishedAt":"0001-01-01T00:00:00Z","oomKilled":false}' ;;
+        'container inspect') printf '%s\n' '{"id":"abc123","startedAt":"2026-10-26T15:00:00Z","finishedAt":"0001-01-01T00:00:00Z","oomKilled":false,"restartCount":0}' ;;
         'stats --no-stream') printf '%s\n' '{"name":"test","cpu":"1%","memory":"1MiB / 2MiB"}' ;;
         'stop abc123') ;;
+        'logs --tail') printf 'listening on 8080\n' ;;
         *) exit 64 ;;
       esac
       """#,

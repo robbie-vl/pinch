@@ -139,6 +139,15 @@ final class CommandRunnerTests: XCTestCase {
     }
   }
 
+  /// Like shell command substitution, only the final newlines go: leading whitespace can be
+  /// content, such as the indented stack frame a log tail starts on.
+  func testKeepsLeadingWhitespaceAndDropsTrailingNewlines() async throws {
+    let output = try await CommandRunner().run(
+      executable: URL(fileURLWithPath: "/bin/sh"),
+      arguments: ["-c", #"printf '    at main.js:12\nError: boom\r\n\n'"#])
+    XCTAssertEqual(output, "    at main.js:12\nError: boom")
+  }
+
   func testLargeOutputDoesNotBlockWaitingForExit() async throws {
     let output = try await CommandRunner().run(
       executable: URL(fileURLWithPath: "/bin/sh"),

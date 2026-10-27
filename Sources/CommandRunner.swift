@@ -83,8 +83,12 @@ private final class CommandProcess: Sendable {
       if let error = state.stopReason { throw error }
     }
 
-    let message = String(decoding: try result.get(), as: UTF8.self).trimmingCharacters(
-      in: .whitespacesAndNewlines)
+    var message = String(decoding: try result.get(), as: UTF8.self)
+    // Only the final newlines, as shell command substitution drops: leading whitespace can be
+    // content, such as the indented stack frame a log tail starts on.
+    while message.last?.isNewline == true {
+      message.removeLast()
+    }
     guard process.terminationStatus == 0 else {
       throw CommandExecutionError(
         executable: executableName,
